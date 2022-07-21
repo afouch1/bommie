@@ -1,6 +1,9 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
+
 mod models;
 mod json;
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use models::*;
@@ -12,6 +15,18 @@ use eframe;
 use rfd::FileDialog;
 
 use serde_json::{Result};
+
+fn print_sort(a: &Print, b: &Print) -> Ordering {
+    if a.name == b.name {
+        return Ordering::Equal;
+    }
+
+    if let (Ok(a_num), Ok(b_num)) = (a.name.parse::<u32>(), b.name.parse::<u32>()) {
+        return a_num.cmp(&b_num);
+    }
+
+    a.name.cmp(&b.name)
+}
 
 fn parse_json(json: String) -> Result<Vec<Print>> {
     let dict: PrintDictionary = serde_json::from_str(json.as_str())?;
@@ -34,7 +49,7 @@ fn parse_json(json: String) -> Result<Vec<Print>> {
         })
     }
 
-    print_vec.sort_by(|a, b| a.name.cmp(&b.name));
+    print_vec.sort_by(print_sort);
     Ok(print_vec)
 }
 
@@ -52,13 +67,24 @@ fn main() {
         ..Default::default()
     };
 
-    let file_contents = get_file_string().unwrap_or(String::new());
+    let args: Vec<String> = std::env::args().collect();
 
-    let (error_message, prints) = if let Ok(maybe_prints) = parse_json(file_contents) {
-        (None, maybe_prints)
+    let (file_contents, error_message) = if let Some(path) = args.get(1) {
+        if let Some(text) = std::fs::read_to_string(path).ok() {
+            (text, None)
+        } else {
+            (Default::default(), Some("Error reading file".into()))
+        }
     } else {
-        (Some("Unable to read file".to_string()), Vec::new())
+        (Default::default(), None)
     };
+
+    let prints = if error_message.is_none() {
+        parse_json(file_contents).unwrap_or(Vec::new())
+    } else {
+        Vec::new()
+    };
+
 
     eframe::run_native(
         "Bommie",
@@ -75,7 +101,7 @@ fn main() {
 }
 
 impl eframe::App for BommieApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::SidePanel::left("prints").resizable(true).show(ctx, |ui| {
             self.show_menu(ui);
             if let Some(message) = self.error_message.clone() {
@@ -116,7 +142,7 @@ impl BommieApp {
         }
 
         if let Ok(prints_json) = serde_json::to_string(&dict) {
-            std::fs::write(path, prints_json);
+            let _ = std::fs::write(path, prints_json);
         };
         None
     }
@@ -198,7 +224,8 @@ impl BommieApp {
 
     fn prints_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Prints");
-        for i in 0..self.prints.len() {
+        let len = self.prints.len();
+        for i in 0..len {
 
             let mut should_break = false;
             let button = if self.current_print == i {
@@ -213,6 +240,9 @@ impl BommieApp {
                     self.current_print = i;
                 }
                 if ui.button("X").clicked() {
+                    if self.current_print == len - 1 {
+                        self.current_print = len - 2;
+                    }
                     self.prints.remove(i);
                     should_break = true;
                 }
@@ -221,12 +251,12 @@ impl BommieApp {
         }
 
         ui.horizontal(|ui| {
-            let mut add_print = |prints: &mut Vec<Print>, pp: &mut String| {
+            let add_print = |prints: &mut Vec<Print>, pp: &mut String| {
                 prints.push(Print {
                     name: pp.clone(),
                     ..Default::default()
                 });
-                prints.sort_by(|a, b| a.name.cmp(&b.name));
+                prints.sort_by(print_sort);
                 pp.clear();
             };
 
